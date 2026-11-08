@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -17,6 +19,15 @@ class _FoodPageState extends ConsumerState<FoodPage> {
   List<Map<String, dynamic>> results = [];
   Map<String, dynamic>? diary;
   bool loading = false;
+  String? searchNote;
+  Timer? _debounce;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    query.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -29,10 +40,51 @@ class _FoodPageState extends ConsumerState<FoodPage> {
     if (mounted) setState(() => diary = data);
   }
 
+  void _onQuery(String value) {
+    _debounce?.cancel();
+    if (value.trim().length < 2) {
+      setState(() { results = []; searchNote = null; loading = false; });
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 250), () => _search(value));
+  }
+
   Future<void> _search(String value) async {
+    setState(() { loading = true; searchNote = null; });
+    final items = await ref.read(fitProvider.notifier).suggestFoods(value);
+    if (!mounted) return;
+    final failed = ref.read(fitProvider).notice;
+    setState(() {
+      results = items;
+      loading = false;
+      searchNote = failed ?? (items.isEmpty ? 'No stored foods match that.' : null);
+    });
+  }
+
+  Future<void> _idea() async {
     setState(() => loading = true);
-    final items = await ref.read(fitProvider.notifier).searchFoods(value);
-    if (mounted) setState(() { results = items; loading = false; });
+    try {
+      final idea = await ref.read(fitProvider.notifier).mealIdea();
+      if (!mounted) return;
+      if (idea?['food_id'] == null) {
+        setState(() => searchNote = idea?['reason']?.toString() ?? 'No suggestion was available.');
+      } else {
+        setState(() {
+          searchNote = idea?['reason']?.toString();
+          results = [{
+            'id': idea!['food_id'],
+            'name_en': idea['name'],
+            'default_serving_g': idea['default_serving_g'] ?? 100,
+            'per_100g': {'energy_kcal': idea['energy_kcal']},
+            'data_origin': 'recipe_estimate',
+          }];
+        });
+      }
+    } catch (error) {
+      if (mounted) setState(() => searchNote = error.toString());
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
   }
 
   @override
@@ -43,15 +95,17 @@ class _FoodPageState extends ConsumerState<FoodPage> {
       children: [
         TextField(
           controller: query,
-          decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search biryani, چکن, roti'),
+          decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search biryani, roti, daal'),
+          onChanged: _onQuery,
           onSubmitted: _search,
         ),
-        const SizedBox(height: 8),
+        Align(alignment: Alignment.centerLeft, child: TextButton(onPressed: loading ? null : _idea, child: const Text('Suggest a meal'))),
         if (loading) const LinearProgressIndicator(minHeight: 3),
+        if (searchNote != null) Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(searchNote!)),
         ...results.map((food) => ListTile(
               contentPadding: EdgeInsets.zero,
               title: Text(food['name_en'].toString(), style: const TextStyle(fontWeight: FontWeight.w700)),
-              subtitle: Text('${food['name_ur'] ?? ''} · ${pretty((food['per_100g'] as Map?)?['energy_kcal'], suffix: ' kcal/100g')} · ${food['data_origin']}'),
+              subtitle: Text('${pretty((food['per_100g'] as Map?)?['energy_kcal'], suffix: ' kcal/100g')} · ${food['data_origin']}'),
               trailing: const Icon(Icons.add_circle, color: emerald),
               onTap: () => _log(food),
             )),

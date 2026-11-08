@@ -37,11 +37,15 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = "noreply@fitdesi.local"
 
-    ai_provider: str = "openai"
+    ai_provider: str = "groq"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     openai_chat_model: str = "gpt-4o-mini"
     openai_vision_model: str = "gpt-4o-mini"
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_chat_model: str = "openai/gpt-oss-20b"
+    groq_vision_model: str = ""
 
     usda_api_key: str = ""
     payment_provider: str = "none"

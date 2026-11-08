@@ -12,6 +12,8 @@
 	<string>FitDesi uses the camera so you can photograph a meal for an estimate.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>FitDesi can use a meal photo from your library.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>FitDesi counts your steps while you walk.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>FitDesi reads the steps, distance and sleep you choose to share from Apple Health.</string>
 	<key>NSHealthUpdateUsageDescription</key>

@@ -29,17 +29,21 @@ class _ActivityPageState extends ConsumerState<ActivityPage> {
 
   @override
   Widget build(BuildContext context) {
-    final dash = ref.watch(fitProvider).dashboard ?? {};
+    final fit = ref.watch(fitProvider);
+    final dash = fit.dashboard ?? {};
     final selected = dash['steps'] as Map?;
+    final server = selected?['steps'];
+    final serverSteps = server is num ? server.toInt() : 0;
+    final shown = fit.liveSteps > serverSteps ? fit.liveSteps : serverSteps;
     return ListView(padding: const EdgeInsets.all(16), children: [
       const Text('Movement', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
       const SizedBox(height: 8),
       FitCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(pretty(selected?['steps']), style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w800)),
-        Text('steps today · source ${selected?['source'] ?? 'none yet'}'),
-        Text('Target ${pretty(dash['step_target'])}. Distance ${pretty(selected?['distance_m'], suffix: ' m')}.'),
+        Text(pretty(shown), style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w800)),
+        Text(fit.liveSteps > 0 ? 'steps today · counting as you walk' : 'steps today · source ${selected?['source'] ?? 'waiting for the sensor'}'),
+        Text('Target ${pretty(dash['step_target'])}. Distance ${pretty(selected?['distance_m'] ?? (shown * 0.75).round(), suffix: ' m')}.'),
         const SizedBox(height: 8),
-        const Text('Health Connect or Apple Health is used when the phone grants access. Manual entry is kept as a separate source and is not added on top.'),
+        Text(fit.stepNote ?? 'Keep the app installed and allow physical activity. Steps from walking are added automatically.'),
       ])),
       const SizedBox(height: 12),
       FilledButton(onPressed: _health, child: const Text('Read steps from the phone')),

@@ -15,8 +15,8 @@ class FitApi {
   final FlutterSecureStorage storage;
   late final Dio dio = Dio(BaseOptions(
     baseUrl: '$baseUrl/api/v1',
-    connectTimeout: const Duration(seconds: 8),
-    receiveTimeout: const Duration(seconds: 20),
+    connectTimeout: const Duration(seconds: 20),
+    receiveTimeout: const Duration(seconds: 45),
   ));
   bool _ready = false;
 

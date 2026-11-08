@@ -20,6 +20,8 @@ dependencies:
   intl: ^0.20.2
   image_picker: ^1.2.0
   health: ^13.2.1
+  pedometer: ^4.1.1
+  permission_handler: ^11.4.0
   flutter_local_notifications: ^19.4.2
   shared_preferences: ^2.5.3
 

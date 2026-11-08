@@ -62,14 +62,13 @@
         <div class="card">
           <h3>Add a food</h3>
           <input id="name" placeholder="English name" />
-          <input id="urdu" placeholder="Urdu name" />
           <input id="kcal" placeholder="kcal per 100 g" />
           <input id="note" placeholder="Source note. Leave nutrients blank if unknown." />
           <button class="primary" id="add">Save food</button>
         </div>
         <div class="card">
           <h3>Import CSV</h3>
-          <p class="muted">Columns: name_en,name_ur,energy_kcal,protein_g,carbohydrate_g,fat_g,fibre_g. Empty nutrient cells stay empty.</p>
+          <p class="muted">Columns: name_en,energy_kcal,protein_g,carbohydrate_g,fat_g,fibre_g. Empty nutrient cells stay empty.</p>
           <input id="file" type="file" accept=".csv,.json" />
           <button class="primary" id="import">Import</button>
           <p id="import-result"></p>
@@ -129,8 +128,8 @@
     }
     $("search").onclick = async () => {
       const data = await api("/foods/search?q=" + encodeURIComponent($("q").value));
-      const rows = data.items.map((food) => `<tr><td>${food.name_en}</td><td>${food.name_ur || ""}</td><td>${food.per_100g.energy_kcal ?? "—"}</td><td>${food.verification_status}</td><td><button data-id="${food.id}" class="verify">Verify</button></td></tr>`).join("");
-      $("results").innerHTML = `<table><tr><th>Name</th><th>Urdu</th><th>kcal/100g</th><th>Status</th><th></th></tr>${rows}</table>`;
+      const rows = data.items.map((food) => `<tr><td>${food.name_en}</td><td>${food.per_100g.energy_kcal ?? "—"}</td><td>${food.verification_status}</td><td><button data-id="${food.id}" class="verify">Verify</button></td></tr>`).join("");
+      $("results").innerHTML = `<table><tr><th>Name</th><th>kcal/100g</th><th>Status</th><th></th></tr>${rows}</table>`;
       document.querySelectorAll(".verify").forEach((button) => button.onclick = async () => {
         await api("/admin/foods/" + button.dataset.id + "/verify", { method: "POST" });
         await loadCoverage();
@@ -139,7 +138,7 @@
     };
     $("add").onclick = async () => {
       await api("/admin/foods", { method: "POST", json: {
-        name_en: $("name").value, name_ur: $("urdu").value, nutrition_note: $("note").value || "Entered by an administrator.",
+        name_en: $("name").value, name_ur: "", nutrition_note: $("note").value || "Entered by an administrator.",
         per_100g: { energy_kcal: $("kcal").value ? Number($("kcal").value) : null }
       }});
       $("name").value = "";

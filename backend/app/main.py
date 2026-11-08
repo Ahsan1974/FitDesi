@@ -1,8 +1,9 @@
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.routes import router
@@ -27,7 +28,19 @@ def home():
     page = Path(__file__).resolve().parents[2] / "public" / "index.html"
     if page.exists():
         return page.read_text(encoding="utf-8")
-    return "<h1>FitDesi</h1><p><a href=\"/fitdesi.apk\">Download the Android app</a></p>"
+    return "<h1>FitDesi</h1><p><a href=\"/fitdesi.apk?v=3\">Download the Android app</a></p>"
+
+
+apk_file = Path(__file__).resolve().parents[2] / "public" / "fitdesi.apk"
+if apk_file.exists() and not os.environ.get("VERCEL"):
+
+    @app.get("/fitdesi.apk", include_in_schema=False)
+    def download_apk():
+        return FileResponse(
+            apk_file,
+            media_type="application/vnd.android.package-archive",
+            filename="fitdesi.apk",
+        )
 
 
 admin_dir = Path(__file__).resolve().parents[2] / "admin"

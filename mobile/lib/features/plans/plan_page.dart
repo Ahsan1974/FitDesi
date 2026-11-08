@@ -43,13 +43,14 @@ class _PlanPageState extends ConsumerState<PlanPage> {
       const SizedBox(height: 8),
       TextField(controller: age, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Age')),
       const SizedBox(height: 12),
-      FilledButton(onPressed: busy ? null : _generate, child: Text(busy ? 'Building…' : 'Build a 7-day Pakistani plan')),
+      FilledButton(onPressed: busy ? null : _generate, child: Text(busy ? 'Building…' : 'Build a 7-day meal plan')),
       if (plan != null) ...[
         const SizedBox(height: 16),
         FitCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(plan!['safety_status'].toString(), style: const TextStyle(fontWeight: FontWeight.w800)),
           if (plan!['blocked_reason'] != null) Text(plan!['blocked_reason'].toString()),
           Text('Target ${pretty(plan!['calorie_target'], suffix: ' kcal')} · protein ${pretty(plan!['protein_g'], suffix: ' g')}'),
+          if (plan!['coach_note'] != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(plan!['coach_note'].toString())),
         ])),
         for (final day in meals.take(2))
           ...((day as Map)['meals'] as List).map((meal) {

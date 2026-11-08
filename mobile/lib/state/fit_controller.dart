@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:health/health.dart';
+import 'package:pedometer/pedometer.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/api.dart';
@@ -19,6 +22,10 @@ class FitState {
     this.baseUrl = kApiBase,
     this.notice,
     this.pending = 0,
+    this.liveSteps = 0,
+    this.stepNote,
+    this.dashboardLoading = false,
+    this.loadError,
   });
 
   final bool ready;
@@ -30,6 +37,10 @@ class FitState {
   final String baseUrl;
   final String? notice;
   final int pending;
+  final int liveSteps;
+  final String? stepNote;
+  final bool dashboardLoading;
+  final String? loadError;
 
   bool get signedIn => user != null;
   bool get onboarded => user?['profile']?['onboarding_completed'] == true;
@@ -46,6 +57,12 @@ class FitState {
     String? notice,
     bool clearNotice = false,
     int? pending,
+    int? liveSteps,
+    String? stepNote,
+    bool clearStepNote = false,
+    bool? dashboardLoading,
+    String? loadError,
+    bool clearLoadError = false,
   }) {
     return FitState(
       ready: ready ?? this.ready,
@@ -57,13 +74,17 @@ class FitState {
       baseUrl: baseUrl ?? this.baseUrl,
       notice: clearNotice ? null : notice ?? this.notice,
       pending: pending ?? this.pending,
+      liveSteps: liveSteps ?? this.liveSteps,
+      stepNote: clearStepNote ? null : stepNote ?? this.stepNote,
+      dashboardLoading: dashboardLoading ?? this.dashboardLoading,
+      loadError: clearLoadError ? null : loadError ?? this.loadError,
     );
   }
 }
 
 const kApiBase = String.fromEnvironment(
   'API_BASE',
-  defaultValue: 'https://fitdesi.vercel.app',
+  defaultValue: 'https://fftdesi-81xd.vercel.app',
 );
 
 final fitProvider = NotifierProvider<FitController, FitState>(FitController.new);
@@ -72,6 +93,10 @@ class FitController extends Notifier<FitState> {
   late FitApi api;
   final local = LocalStore();
   final storage = const FlutterSecureStorage();
+  StreamSubscription<StepCount>? _stepsSub;
+  DateTime? _lastStepSync;
+  int _lastSyncedSteps = -1;
+  bool _stepStarting = false;
 
   @override
   FitState build() {
@@ -108,6 +133,7 @@ class FitController extends Notifier<FitState> {
     if (user != null) {
       await refreshDashboard();
       await syncOutbox();
+      await startStepCounter();
     }
     } catch (_) {
       state = state.copy(ready: true);
@@ -148,6 +174,7 @@ class FitController extends Notifier<FitState> {
       final user = Map<String, dynamic>.from(await api.get('/users/me') as Map);
       state = state.copy(busy: false, user: user);
       await refreshDashboard();
+      await startStepCounter();
       return null;
     } catch (error) {
       state = state.copy(busy: false);
@@ -195,23 +222,54 @@ class FitController extends Notifier<FitState> {
   }
 
   Future<void> refreshDashboard() async {
+    state = state.copy(dashboardLoading: true, clearLoadError: true);
     try {
       final data = Map<String, dynamic>.from(await api.get('/dashboard/today') as Map);
       await local.saveRecord('dashboard', data);
-      state = state.copy(dashboard: data);
+      state = state.copy(dashboard: data, dashboardLoading: false);
     } catch (_) {
       final cached = await local.readRecord('dashboard');
-      if (cached is Map) state = state.copy(dashboard: Map<String, dynamic>.from(cached));
+      state = state.copy(
+        dashboard: cached is Map ? Map<String, dynamic>.from(cached) : state.dashboard,
+        dashboardLoading: false,
+        loadError: 'Today\'s numbers could not be loaded. Pull down to try again.',
+      );
     }
+  }
+
+  Future<List<Map<String, dynamic>>> suggestFoods(String query) async {
+    final term = query.trim();
+    if (term.length < 2) return [];
+    try {
+      final data = await api.get('/foods/suggest', query: {'q': term, 'limit': 8});
+      final items = ((data as Map)['items'] as List).map((item) => Map<String, dynamic>.from(item as Map)).toList();
+      await local.cacheFoods(items);
+      state = state.copy(clearNotice: true);
+      return items;
+    } catch (_) {
+      state = state.copy(notice: 'Food search could not reach the server.');
+      return local.searchFoods(term);
+    }
+  }
+
+  Future<Map<String, dynamic>?> mealIdea() async {
+    final data = await api.post('/ai/meal-idea');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  Future<String> dailyTip() async {
+    final data = await api.get('/ai/tip');
+    return (data as Map)['tip']?.toString() ?? '';
   }
 
   Future<List<Map<String, dynamic>>> searchFoods(String query, {String? cuisine}) async {
     try {
-      final data = await api.get('/foods/search', query: {'q': query, 'cuisine': cuisine, 'page_size': 30});
+      final data = await api.get('/foods/search', query: {'q': query, 'cuisine': cuisine, 'page_size': 20});
       final items = ((data as Map)['items'] as List).map((item) => Map<String, dynamic>.from(item as Map)).toList();
       await local.cacheFoods(items);
       return items;
     } catch (_) {
+      state = state.copy(notice: 'Food search could not reach the server.');
       return local.searchFoods(query);
     }
   }
@@ -297,11 +355,56 @@ class FitController extends Notifier<FitState> {
     }
   }
 
-  Future<String?> saveSteps(int steps, String source) async {
+  Future<void> startStepCounter() async {
+    if (_stepsSub != null || _stepStarting) return;
+    _stepStarting = true;
+    final status = await Permission.activityRecognition.request();
+    if (!status.isGranted) {
+      _stepStarting = false;
+      state = state.copy(stepNote: 'Allow physical activity so steps can be counted while you walk.');
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    if (prefs.getString('step_day') == today) {
+      state = state.copy(liveSteps: prefs.getInt('step_today') ?? 0, clearStepNote: true);
+    }
+    _stepsSub = Pedometer.stepCountStream.listen((event) async {
+      final stored = await SharedPreferences.getInstance();
+      final day = DateTime.now().toIso8601String().substring(0, 10);
+      var base = stored.getInt('step_base');
+      final savedDay = stored.getString('step_day');
+      if (savedDay != day || base == null || event.steps < base) {
+        base = event.steps;
+        await stored.setInt('step_base', base);
+        await stored.setString('step_day', day);
+      }
+      final count = max(0, event.steps - base);
+      await stored.setInt('step_today', count);
+      state = state.copy(liveSteps: count, clearStepNote: true);
+      final now = DateTime.now();
+      final due = _lastStepSync == null || now.difference(_lastStepSync!) > const Duration(seconds: 20);
+      if (state.signedIn && count != _lastSyncedSteps && due) {
+        _lastStepSync = now;
+        _lastSyncedSteps = count;
+        await saveSteps(count, 'sensor', quiet: true);
+      }
+    }, onError: (_) {
+      state = state.copy(stepNote: 'The step sensor is unavailable. Enter steps manually.');
+    });
+  }
+
+  Future<String?> saveSteps(int steps, String source, {bool quiet = false}) async {
     final body = {'day': DateTime.now().toIso8601String().substring(0, 10), 'steps': steps, 'source': source};
     try {
       await api.post('/activity/steps/sync', data: body);
-      await refreshDashboard();
+      if (quiet) {
+        final dash = Map<String, dynamic>.from(state.dashboard ?? {});
+        dash['steps'] = {'steps': steps, 'source': source, 'distance_m': (steps * 0.75).round()};
+        state = state.copy(dashboard: dash, liveSteps: steps);
+      } else {
+        await refreshDashboard();
+      }
       return null;
     } on ApiException catch (error) {
       if (!error.offline) return error.message;

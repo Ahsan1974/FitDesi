@@ -48,10 +48,7 @@ class FitApp extends ConsumerWidget {
       darkTheme: fitTheme(Brightness.dark),
       themeMode: fit.dark ? ThemeMode.dark : ThemeMode.light,
       routerConfig: ref.watch(routerProvider),
-      builder: (context, child) => Directionality(
-        textDirection: fit.locale == 'ur' ? TextDirection.rtl : TextDirection.ltr,
-        child: child ?? const SizedBox.shrink(),
-      ),
+      builder: (context, child) => child ?? const SizedBox.shrink(),
     );
   }
 }
@@ -87,6 +84,12 @@ class HomeShell extends ConsumerStatefulWidget {
 
 class _HomeShellState extends ConsumerState<HomeShell> {
   int index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(() => ref.read(fitProvider.notifier).startStepCounter());
+  }
 
   @override
   Widget build(BuildContext context) {

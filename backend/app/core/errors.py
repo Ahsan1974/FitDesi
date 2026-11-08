@@ -28,7 +28,9 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(StarletteHTTPException)
     async def http_error_handler(_: Request, exc: StarletteHTTPException):
         detail = exc.detail if isinstance(exc.detail, str) else "Request failed"
-        return JSONResponse(status_code=exc.status_code, content=error_body("http_error", detail))
+        response = JSONResponse(status_code=exc.status_code, content=error_body("http_error", detail))
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def validation_handler(_: Request, exc: RequestValidationError):

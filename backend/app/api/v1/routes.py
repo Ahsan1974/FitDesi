@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.v1.common import audit, day_window, find_mutation, food_out, load_food_bundle, num, nutrition_out, ok, parse_day, rate_limit
@@ -64,7 +64,7 @@ from app.models import (
     WorkoutPlan,
     WorkoutPlanDay,
 )
-from app.services.ai_service import consultant_reply, recognise_foods
+from app.services.ai_service import choose_meal, consultant_reply, daily_tip, explain_plan, recognise_foods
 from app.services.calc import (
     SOURCE_PRIORITY,
     assess_feasibility,
@@ -652,24 +652,32 @@ def _food_query(db: Session, q: str | None, category: str | None, cuisine: str |
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
     stmt = stmt.order_by((Food.data_origin == "recipe_estimate").desc(), Food.name_en)
     rows = db.scalars(stmt.offset((page - 1) * page_size).limit(page_size)).all()
-    items = []
-    for food in rows:
-        nutrition = db.get(FoodNutrition, food.id)
-        items.append(food_out(food, nutrition))
-    if q and len(items) < 3:
+    items = _foods_with_nutrition(db, rows)
+    if q and len(items) < 3 and len(q.strip()) >= 3:
         from rapidfuzz import fuzz
-        candidates = db.scalars(select(Food).where(Food.deleted_at.is_(None)).limit(400)).all()
+        candidates = db.scalars(select(Food).where(Food.deleted_at.is_(None)).limit(120)).all()
         ranked = sorted(candidates, key=lambda food: fuzz.token_set_ratio(q.lower(), food.search_text or food.name_en.lower()), reverse=True)
         seen = {item["id"] for item in items}
+        extra = []
         for food in ranked:
             if food.id in seen:
                 continue
             if fuzz.token_set_ratio(q.lower(), (food.search_text or food.name_en).lower()) < 72:
                 break
-            items.append(food_out(food, db.get(FoodNutrition, food.id)))
-            if len(items) >= page_size:
+            extra.append(food)
+            if len(items) + len(extra) >= page_size:
                 break
+        items.extend(_foods_with_nutrition(db, extra))
     return items, total or 0
+
+
+def _foods_with_nutrition(db: Session, rows: list[Food]) -> list[dict]:
+    if not rows:
+        return []
+    ids = [food.id for food in rows]
+    nutrition_rows = db.scalars(select(FoodNutrition).where(FoodNutrition.food_id.in_(ids))).all()
+    by_id = {row.food_id: row for row in nutrition_rows}
+    return [food_out(food, by_id.get(food.id)) for food in rows]
 
 
 @router.get("/foods/categories")
@@ -682,6 +690,43 @@ def food_categories(db: Session = Depends(get_db)):
 def food_cuisines(db: Session = Depends(get_db)):
     rows = db.scalars(select(RegionalCuisine).order_by(RegionalCuisine.name_en)).all()
     return ok([{"id": row.id, "slug": row.slug, "name_en": row.name_en, "name_ur": row.name_ur} for row in rows])
+
+
+@router.get("/foods/suggest")
+def suggest_foods(q: str = "", limit: int = 8, db: Session = Depends(get_db)):
+    """Prefix and contains matches for the search box. No full-table count."""
+    term = " ".join(q.lower().split())
+    if len(term) < 2:
+        return ok({"items": []})
+    cap = min(max(limit, 1), 12)
+    prefix = f"{term}%"
+    contains = f"%{term}%"
+    rows = db.execute(
+        select(Food, FoodNutrition)
+        .join(FoodNutrition, FoodNutrition.food_id == Food.id)
+        .where(
+            Food.deleted_at.is_(None),
+            Food.archived_at.is_(None),
+            or_(Food.name_en.ilike(contains), Food.name_roman.ilike(contains), Food.search_text.ilike(contains)),
+        )
+        .order_by(
+            case((Food.name_en.ilike(prefix), 0), else_=1),
+            case((Food.data_origin == "recipe_estimate", 0), else_=1),
+            func.length(Food.name_en),
+        )
+        .limit(cap)
+    ).all()
+    items = []
+    for food, nutrition in rows:
+        items.append({
+            "id": food.id,
+            "name_en": food.name_en,
+            "default_serving_g": food.default_serving_g,
+            "data_origin": food.data_origin,
+            "nutrition_note": food.nutrition_note,
+            "per_100g": {"energy_kcal": num(nutrition.energy_kcal) if nutrition else None},
+        })
+    return ok({"items": items})
 
 
 @router.get("/foods/search")
@@ -1091,7 +1136,7 @@ def _plan_out(db: Session, plan: WellnessPlan) -> dict:
         "calorie_target": plan.calorie_target, "protein_g": plan.protein_g, "carbohydrate_g": plan.carbohydrate_g,
         "fat_g": plan.fat_g, "fibre_g": plan.fibre_g, "hydration_ml": plan.hydration_ml,
         "formula_name": plan.formula_name, "formula_version": plan.formula_version,
-        "feasibility": plan.feasibility_json, "meals": meals, "workouts": workout_days,
+        "feasibility": plan.feasibility_json, "coach_note": (plan.feasibility_json or {}).get("coach_note"), "meals": meals, "workouts": workout_days,
         "created_at": plan.created_at.isoformat(),
     }
 
@@ -1104,6 +1149,17 @@ def feasibility(body: PlanIn, user: User = Depends(get_current_user)):
 @router.post("/plans/generate", status_code=201)
 def generate_plan(body: PlanIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     plan = _store_plan(db, user, body, "Generated from the questionnaire.")
+    note = explain_plan({
+        "calorie_target": plan.calorie_target,
+        "protein_g": plan.protein_g,
+        "safety_status": plan.safety_status,
+        "blocked_reason": plan.blocked_reason,
+    })
+    feasibility = dict(plan.feasibility_json or {})
+    feasibility["coach_note"] = note
+    plan.feasibility_json = feasibility
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(plan, "feasibility_json")
     db.commit()
     return ok(_plan_out(db, plan))
 
@@ -1420,11 +1476,56 @@ def chat(body: ChatIn, user: User = Depends(get_current_user), db: Session = Dep
         session = AiChatSession(user_id=user.id, language=body.language, title=body.message[:80])
         db.add(session)
         db.flush()
-    reply = consultant_reply(body.message, context, body.language)
+    reply = consultant_reply(body.message, context, "en")
     db.add(AiChatMessage(session_id=session.id, role="user", content=body.message, provider="user"))
     db.add(AiChatMessage(session_id=session.id, role="assistant", content=reply["content"], provider=reply["provider"], context_json=context))
     db.commit()
     return ok({"session_id": session.id, "reply": reply["content"], "provider": reply["provider"], "based_on_records": True})
+
+
+@router.get("/ai/tip")
+def ai_tip(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    today = parse_day(None, user)
+    start, end = day_window(user, today)
+    logs = db.scalars(select(DailyFoodLog).where(DailyFoodLog.user_id == user.id, DailyFoodLog.logged_at >= start, DailyFoodLog.logged_at < end)).all()
+    summary = summarize_nutrients([{field: getattr(row, field) for field in ("energy_kcal", "protein_g", "carbohydrate_g", "fat_g")} for row in logs])
+    goal = db.get(UserGoal, user.id)
+    plan = db.scalar(select(WellnessPlan).where(WellnessPlan.user_id == user.id, WellnessPlan.status == "active"))
+    steps = _select_steps(db, user.id, today)
+    context = {
+        "today": {"energy_kcal": summary.get("energy_kcal"), "logged": summary.get("logged")},
+        "plan": {"calorie_target": plan.calorie_target if plan else (goal.calorie_target if goal else None)},
+        "steps": steps["steps"] if steps else None,
+    }
+    return ok({"tip": daily_tip(context)})
+
+
+@router.post("/ai/meal-idea")
+def meal_idea(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    today = parse_day(None, user)
+    start, end = day_window(user, today)
+    logs = db.scalars(select(DailyFoodLog).where(DailyFoodLog.user_id == user.id, DailyFoodLog.logged_at >= start, DailyFoodLog.logged_at < end)).all()
+    summary = summarize_nutrients([{"energy_kcal": row.energy_kcal} for row in logs])
+    goal = db.get(UserGoal, user.id)
+    plan = db.scalar(select(WellnessPlan).where(WellnessPlan.user_id == user.id, WellnessPlan.status == "active"))
+    target = plan.calorie_target if plan and plan.calorie_target else (goal.calorie_target if goal else None)
+    consumed = summary.get("energy_kcal") if summary.get("logged") else None
+    remaining = None if target is None or consumed is None else round(target - consumed, 1)
+    rows = db.execute(
+        select(Food, FoodNutrition)
+        .join(FoodNutrition, FoodNutrition.food_id == Food.id)
+        .where(Food.deleted_at.is_(None), Food.data_origin == "recipe_estimate", FoodNutrition.energy_kcal.is_not(None))
+        .order_by(Food.name_en)
+        .limit(12)
+    ).all()
+    candidates = [{
+        "id": food.id,
+        "name": food.name_en,
+        "energy_kcal": num(nutrition.energy_kcal),
+        "default_serving_g": food.default_serving_g,
+    } for food, nutrition in rows]
+    choice = choose_meal(candidates, remaining)
+    return ok({**choice, "remaining_kcal": remaining})
 
 
 @router.get("/meal-plans")

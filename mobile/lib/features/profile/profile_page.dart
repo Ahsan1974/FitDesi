@@ -22,12 +22,6 @@ class ProfilePage extends ConsumerWidget {
         value: fit.dark,
         onChanged: (value) => ref.read(fitProvider.notifier).setDark(value),
       ),
-      SwitchListTile(
-        contentPadding: EdgeInsets.zero,
-        title: const Text('اردو'),
-        value: fit.locale == 'ur',
-        onChanged: (value) => ref.read(fitProvider.notifier).setLocale(value ? 'ur' : 'en'),
-      ),
       ListTile(contentPadding: EdgeInsets.zero, title: const Text('Weight-loss plan'), trailing: const Icon(Icons.chevron_right), onTap: () => open('/plan')),
       ListTile(contentPadding: EdgeInsets.zero, title: const Text('Recipe calculator'), trailing: const Icon(Icons.chevron_right), onTap: () => open('/recipe')),
       ListTile(contentPadding: EdgeInsets.zero, title: const Text('Nutrition consultant'), trailing: const Icon(Icons.chevron_right), onTap: () => open('/chat')),

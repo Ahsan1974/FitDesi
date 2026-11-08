@@ -41,3 +41,5 @@ Desktop.ini
 # Coverage
 htmlcov/
 .coverage
+.vercel
+.env*
