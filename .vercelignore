@@ -1,0 +1,11 @@
+.tools
+.git
+backend/.venv
+backend/storage
+mobile/.dart_tool
+mobile/build
+mobile/android/.gradle
+**/.pytest_cache
+**/__pycache__
+**/*.pyc
+.env

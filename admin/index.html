@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FitDesi Admin</title>
+  <style>
+    :root { --emerald:#0e6b4f; --ink:#14211c; --paper:#f3f6f3; --line:#e2ebe6; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: "Segoe UI", sans-serif; background:var(--paper); color:var(--ink); }
+    header { background:linear-gradient(120deg,#084536,#0e6b4f); color:white; padding:22px 28px; display:flex; justify-content:space-between; align-items:center; }
+    main { display:grid; grid-template-columns: 220px 1fr; min-height: calc(100vh - 84px); }
+    nav { padding:16px; border-right:1px solid var(--line); }
+    nav button { width:100%; text-align:left; margin-bottom:8px; background:white; border:0; border-radius:12px; padding:12px; cursor:pointer; }
+    nav button.active { background:#d8f6e8; color:var(--emerald); font-weight:700; }
+    section { padding:22px; }
+    .card { background:white; border-radius:18px; padding:16px; margin-bottom:14px; }
+    input, select, textarea { width:100%; padding:10px 12px; border-radius:12px; border:1px solid var(--line); margin:6px 0 10px; }
+    button.primary { background:var(--emerald); color:white; border:0; border-radius:12px; padding:10px 14px; cursor:pointer; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; padding:8px; border-bottom:1px solid var(--line); font-size:14px; }
+    .muted { color:#5d6b66; }
+    .hidden { display:none; }
+    .error { color:#9d2c2c; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>FitDesi Admin</strong>
+      <div class="muted" style="color:#d8f6e8">Food records, verification and consultation fees</div>
+    </div>
+    <button id="logout" class="primary" style="display:none">Log out</button>
+  </header>
+  <main id="gate">
+    <section style="grid-column:1 / -1; max-width:460px">
+      <div class="card">
+        <h2>Administrator sign in</h2>
+        <p class="muted">Use the admin account from the seed. Fees and verification are saved only when you enter them.</p>
+        <input id="server" value="http://127.0.0.1:8000" />
+        <input id="email" placeholder="Email" value="admin@fitdesi.local" />
+        <input id="password" placeholder="Password" type="password" value="change-me-admin" />
+        <button class="primary" id="login">Sign in</button>
+        <p id="login-error" class="error"></p>
+      </div>
+    </section>
+  </main>
+  <main id="app" class="hidden">
+    <nav>
+      <button data-tab="coverage" class="active">Coverage</button>
+      <button data-tab="foods">Foods</button>
+      <button data-tab="consultants">Consultants</button>
+    </nav>
+    <section>
+      <div id="coverage"></div>
+      <div id="foods" class="hidden">
+        <div class="card">
+          <input id="q" placeholder="Search foods" />
+          <button class="primary" id="search">Search</button>
+          <div id="results"></div>
+        </div>
+        <div class="card">
+          <h3>Add a food</h3>
+          <input id="name" placeholder="English name" />
+          <input id="urdu" placeholder="Urdu name" />
+          <input id="kcal" placeholder="kcal per 100 g" />
+          <input id="note" placeholder="Source note. Leave nutrients blank if unknown." />
+          <button class="primary" id="add">Save food</button>
+        </div>
+        <div class="card">
+          <h3>Import CSV</h3>
+          <p class="muted">Columns: name_en,name_ur,energy_kcal,protein_g,carbohydrate_g,fat_g,fibre_g. Empty nutrient cells stay empty.</p>
+          <input id="file" type="file" accept=".csv,.json" />
+          <button class="primary" id="import">Import</button>
+          <p id="import-result"></p>
+        </div>
+      </div>
+      <div id="consultants" class="hidden">
+        <div class="card">
+          <h3>New consultant</h3>
+          <p class="muted">Verification stays unverified until you set it. Do not mark a person verified without checking their credentials.</p>
+          <input id="cname" placeholder="Display name" />
+          <input id="cqual" placeholder="Qualifications" />
+          <input id="cfee" placeholder="Initial fee in PKR" />
+          <button class="primary" id="cadd">Save consultant</button>
+          <div id="clist"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script>
+    let token = "";
+    const $ = (id) => document.getElementById(id);
+    if (location.protocol.startsWith("http") && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+      $("server").value = location.origin;
+    }
+    function base() { return $("server").value.replace(/\/$/, ""); }
+    async function api(path, options = {}) {
+      const headers = options.headers || {};
+      if (token) headers.Authorization = "Bearer " + token;
+      if (options.json) { headers["Content-Type"] = "application/json"; options.body = JSON.stringify(options.json); }
+      const response = await fetch(base() + "/api/v1" + path, { ...options, headers });
+      const text = await response.text();
+      const body = text ? JSON.parse(text) : {};
+      if (!response.ok) throw new Error(body.error?.message || "Request failed");
+      return body.data;
+    }
+    $("login").onclick = async () => {
+      try {
+        const data = await api("/auth/login", { method: "POST", json: { email: $("email").value, password: $("password").value } });
+        token = data.access_token;
+        $("gate").classList.add("hidden");
+        $("app").classList.remove("hidden");
+        $("logout").style.display = "inline-block";
+        await loadCoverage();
+      } catch (error) { $("login-error").textContent = error.message; }
+    };
+    $("logout").onclick = () => { token = ""; location.reload(); };
+    document.querySelectorAll("nav button").forEach((button) => button.onclick = () => {
+      document.querySelectorAll("nav button").forEach((item) => item.classList.remove("active"));
+      button.classList.add("active");
+      ["coverage", "foods", "consultants"].forEach((id) => $(id).classList.add("hidden"));
+      $(button.dataset.tab).classList.remove("hidden");
+      if (button.dataset.tab === "consultants") loadConsultants();
+    });
+    async function loadCoverage() {
+      const data = await api("/admin/foods/coverage");
+      $("coverage").innerHTML = `<div class="card"><h2>Catalogue</h2><p>Total ${data.total}. Verified ${data.verified}. Awaiting verification ${data.awaiting_verification}.</p><p class="muted">USDA ${data.imported_usda || 0}. Compiled ${data.compiled_reference || 0}. Recipe estimates ${data.recipe_estimate || 0}.</p></div>`;
+    }
+    $("search").onclick = async () => {
+      const data = await api("/foods/search?q=" + encodeURIComponent($("q").value));
+      const rows = data.items.map((food) => `<tr><td>${food.name_en}</td><td>${food.name_ur || ""}</td><td>${food.per_100g.energy_kcal ?? "—"}</td><td>${food.verification_status}</td><td><button data-id="${food.id}" class="verify">Verify</button></td></tr>`).join("");
+      $("results").innerHTML = `<table><tr><th>Name</th><th>Urdu</th><th>kcal/100g</th><th>Status</th><th></th></tr>${rows}</table>`;
+      document.querySelectorAll(".verify").forEach((button) => button.onclick = async () => {
+        await api("/admin/foods/" + button.dataset.id + "/verify", { method: "POST" });
+        await loadCoverage();
+        button.textContent = "Verified";
+      });
+    };
+    $("add").onclick = async () => {
+      await api("/admin/foods", { method: "POST", json: {
+        name_en: $("name").value, name_ur: $("urdu").value, nutrition_note: $("note").value || "Entered by an administrator.",
+        per_100g: { energy_kcal: $("kcal").value ? Number($("kcal").value) : null }
+      }});
+      $("name").value = "";
+      await loadCoverage();
+    };
+    $("import").onclick = async () => {
+      const file = $("file").files[0];
+      if (!file) return;
+      const form = new FormData();
+      form.append("file", file);
+      const response = await fetch(base() + "/api/v1/admin/foods/import", { method: "POST", headers: { Authorization: "Bearer " + token }, body: form });
+      const body = await response.json();
+      $("import-result").textContent = response.ok ? JSON.stringify(body.data) : (body.error?.message || "Import failed");
+      await loadCoverage();
+    };
+    async function loadConsultants() {
+      const rows = await api("/consultants");
+      $("clist").innerHTML = rows.map((person) => `<p><strong>${person.display_name}</strong> · ${person.verification_status}<br><span class="muted">${person.fee_disclaimer || ""}</span></p>`).join("");
+    }
+    $("cadd").onclick = async () => {
+      const person = await api("/admin/consultants", { method: "POST", json: { display_name: $("cname").value, qualifications: $("cqual").value, verification_status: "unverified" } });
+      if ($("cfee").value) {
+        await api("/admin/consultant-services?consultant_id=" + person.id, { method: "POST", json: { service_type: "initial", title: "Initial consultation", price_amount: Number($("cfee").value) } });
+      }
+      await loadConsultants();
+    };
+  </script>
+</body>
+</html>

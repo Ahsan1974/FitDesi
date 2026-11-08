@@ -1,0 +1,1 @@
+"""FitDesi backend application."""
